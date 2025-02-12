@@ -2,6 +2,7 @@ from flask import Flask, jsonify
 import requests
 from bs4 import BeautifulSoup
 from flask_cors import CORS
+import os
 
 app = Flask(__name__)
 CORS(app)
@@ -9,7 +10,7 @@ CORS(app)
 # Ars Technica URLs
 ARS_TECHNICA_URLS = {
     "AI": "https://arstechnica.com/ai/",
-    "IT":"https://arstechnica.com/information-technology/",
+    "IT": "https://arstechnica.com/information-technology/",
     "Cars": "https://arstechnica.com/cars/",
     "Culture": "https://arstechnica.com/culture/",
     "Gaming": "https://arstechnica.com/gaming/",
@@ -57,7 +58,7 @@ def scrape_ars_technica(url):
                     "url": link
                 })
 
-        return articles[:30]  # Get only the latest 5 articles
+        return articles[:5]  # Limit to latest 5 articles
 
     except Exception as e:
         print(f"❌ Error scraping {url}: {e}")
@@ -78,4 +79,5 @@ def get_all_news():
     return jsonify(all_news)
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    port = int(os.environ.get("PORT", 5000))  # Use dynamic port for Render
+    app.run(host="0.0.0.0", port=port, debug=True)
