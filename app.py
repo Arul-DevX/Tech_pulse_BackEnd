@@ -21,14 +21,22 @@ RSS_FEEDS = {
     "AI": "https://techcrunch.com/category/artificial-intelligence/feed/",
     "Apps": "https://techcrunch.com/category/apps/feed/",
     "Security": "https://techcrunch.com/category/security/feed/",
+    "Climate": "https://techcrunch.com/category/climate/feed/",
     "Cloud Computing": "https://techcrunch.com/tag/cloud-computing/feed/",
     "Gadgets": "https://techcrunch.com/category/gadgets/feed/",
     "Gaming": "https://techcrunch.com/category/gaming/feed/",
     "Space": "https://techcrunch.com/category/space/feed/",
+    "Government Policy": "https://techcrunch.com/category/government-policy/feed/",
     "Layoffs": "https://techcrunch.com/tag/layoffs/feed/",
     "Privacy": "https://techcrunch.com/category/privacy/feed/",
+    "Social": "https://techcrunch.com/category/social/feed/",
+    "Media Entertainment": "https://techcrunch.com/category/media-entertainment/feed/",
     "Crypto Currency": "https://techcrunch.com/category/cryptocurrency/feed/",
     "Robotics": "https://techcrunch.com/category/robotics/feed/",
+    "Startups": "https://techcrunch.com/category/startups/feed/",
+    "Enterprise": "https://techcrunch.com/category/enterprise/feed/",
+    "Commerce": "https://techcrunch.com/category/commerce/feed/",
+    "Biotech Health": "https://techcrunch.com/category/biotech-health/feed/"
 }
 
 HEADERS = {
@@ -75,7 +83,7 @@ def fetch_news(feed_url, category_name):
             return []
 
         articles = []
-        for entry in feed.entries[:6]:  # Limit to latest 15 articles
+        for entry in feed.entries[:2]:  # Limit to latest 15 articles
             image_url = None
             if "media_content" in entry:
                 image_url = entry.media_content[0]["url"]
