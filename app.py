@@ -4,18 +4,10 @@ import requests
 import feedparser
 from bs4 import BeautifulSoup
 import os
-import concurrent.futures
 from datetime import datetime
-from flask_caching import Cache
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})  # Enable CORS for all routes
-
-# Cache configuration (stores data for 5 minutes)
-app.config["CACHE_TYPE"] = "SimpleCache"
-app.config["CACHE_DEFAULT_TIMEOUT"] = 300  # 5 minutes
-cache = Cache(app)
-cache.init_app(app)
 
 # RSS Feeds
 RSS_FEEDS = {
@@ -44,13 +36,26 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
+def get_article_image(article_url):
+    """Fetches the article page and extracts the featured image from og:image."""
+    try:
+        response = requests.get(article_url, headers=HEADERS, timeout=5)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            og_image = soup.find("meta", property="og:image")
+            if og_image and og_image.get("content"):
+                return og_image["content"]
+    except Exception as e:
+        print(f"Error fetching image: {e}")
+    return None
+
 def clean_html(raw_html):
     """Removes HTML tags from the description."""
     soup = BeautifulSoup(raw_html, "html.parser")
     return soup.get_text()
 
 def format_date(date_string):
-    """Formats the date properly and removes time zone info."""
+    """Removes +0000 and formats the date properly."""
     try:
         parsed_date = datetime.strptime(date_string, "%a, %d %b %Y %H:%M:%S %z")
         return parsed_date.strftime("%Y-%m-%d %H:%M:%S")  # Example: 2025-02-15 18:39:14
@@ -58,34 +63,11 @@ def format_date(date_string):
         print(f"Error formatting date: {e}")
         return date_string  # Return original if parsing fails
 
-def extract_image(entry):
-    """Extracts an image from the RSS entry."""
-    # Check for media:content or media:thumbnail
-    if "media_content" in entry and isinstance(entry.media_content, list):
-        for media in entry.media_content:
-            if "url" in media:
-                return media["url"]
-
-    if "media_thumbnail" in entry and isinstance(entry.media_thumbnail, list):
-        for media in entry.media_thumbnail:
-            if "url" in media:
-                return media["url"]
-
-    # Fallback: Try extracting the first <img> tag from the description
-    if "description" in entry:
-        soup = BeautifulSoup(entry.description, "html.parser")
-        img_tag = soup.find("img")
-        if img_tag and img_tag.get("src"):
-            return img_tag["src"]
-
-    # Provide a default placeholder image if nothing is found
-    return "https://via.placeholder.com/300x200?text=No+Image"
-
 def fetch_news(feed_url, category_name):
     """Fetch and parse RSS feed articles."""
     try:
         response = requests.get(feed_url, headers=HEADERS, timeout=10)
-        response.raise_for_status()  # Raises an error for HTTP failures
+        response.raise_for_status()
 
         feed = feedparser.parse(response.text)
         if not feed.entries:
@@ -93,8 +75,25 @@ def fetch_news(feed_url, category_name):
             return []
 
         articles = []
-        for entry in feed.entries[:40]:  # Limit to latest 40 articles
-            image_url = extract_image(entry)  # Extract image using function
+        for entry in feed.entries[:4]:  # Limit to latest 40 articles
+            # Extract image from RSS fields
+            image_url = None
+            if "media_content" in entry:
+                image_url = entry.media_content[0]["url"]
+            elif "media_thumbnail" in entry:
+                image_url = entry.media_thumbnail[0]["url"]
+            elif "enclosures" in entry and entry.enclosures:
+                image_url = entry.enclosures[0]["href"]
+            elif "content" in entry and isinstance(entry.content, list):
+                # Check for image inside content
+                soup = BeautifulSoup(entry.content[0].value, "html.parser")
+                img_tag = soup.find("img")
+                if img_tag and img_tag.get("src"):
+                    image_url = img_tag["src"]
+
+            # Fetch image from article page if missing
+            if not image_url:
+                image_url = get_article_image(entry.link)
 
             categories = [category for category in entry.get("tags", [])]
             category_names = [cat.term for cat in categories] if categories else []
@@ -108,7 +107,7 @@ def fetch_news(feed_url, category_name):
                 "description": description_text,
                 "author": entry.get("author", "Unknown Author"),
                 "published": formatted_date,
-                "image": image_url,  # Extracted image
+                "image": image_url or "https://via.placeholder.com/300",  # Fallback placeholder
                 "topics": category_names,
                 "category": category_name,
                 "source": "TechCrunch"
@@ -120,21 +119,18 @@ def fetch_news(feed_url, category_name):
         return []
 
 @app.route("/api/techcrunch", methods=["GET"])
-@cache.cached(timeout=300)  # Cache for 5 minutes
 def get_techcrunch_news():
+    """Fetch all TechCrunch news categories."""
     news = []
     all_topics = set()
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
-        future_to_category = {executor.submit(fetch_news, url, category): category for category, url in RSS_FEEDS.items()}
+    for category, url in RSS_FEEDS.items():
+        category_news = fetch_news(url, category)
+        news.extend(category_news)
 
-        for future in concurrent.futures.as_completed(future_to_category):
-            category_news = future.result()
-            news.extend(category_news)
-
-            # Collect unique topics
-            for article in category_news:
-                all_topics.update(article["topics"])
+        # Collect all unique topics from feeds
+        for article in category_news:
+            all_topics.update(article["topics"])
 
     return jsonify({"news": news, "topics": list(all_topics)})
 
