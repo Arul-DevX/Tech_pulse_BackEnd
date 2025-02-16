@@ -76,7 +76,7 @@ def fetch_news(feed_url, category_name):
             return []
 
         articles = []
-        for entry in feed.entries[:20]:  # Limit to latest 40 articles
+        for entry in feed.entries[:6]:  # Limit to latest 40 articles
             # Extract image from RSS fields
             image_url = None
             if "media_content" in entry:
