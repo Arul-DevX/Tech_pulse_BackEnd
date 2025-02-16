@@ -4,6 +4,7 @@ import requests
 import feedparser
 from bs4 import BeautifulSoup
 import os
+from datetime import datetime
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})  # Enable CORS for all routes
@@ -12,24 +13,25 @@ CORS(app, resources={r"/*": {"origins": "*"}})  # Enable CORS for all routes
 RSS_FEEDS = {
     "AI": "https://techcrunch.com/category/artificial-intelligence/feed/",
     "Apps": "https://techcrunch.com/category/apps/feed/",
-    "Security" : "https://techcrunch.com/category/security/feed/",
-    "Climate" : "https://techcrunch.com/category/climate/feed/",
-    "Cloud Computing" : "https://techcrunch.com/category/cloud-computing/feed/",
-    "Gadgets" : "https://techcrunch.com/category/gadgets/feed/",
-    "Gaming" : "https://techcrunch.com/category/gaming/feed/",
-    "Space" : "https://techcrunch.com/category/space/feed/",
-    "Government Policy" : "https://techcrunch.com/category/government-policy/feed/",
-    "Layoffs" : "https://techcrunch.com/category/layoffs/feed/",
-    "privacy" : "https://techcrunch.com/category/privacy/feed/",
-    "Social" : "https://techcrunch.com/category/social/feed/",
-    "Media Entertainment" : "https://techcrunch.com/category/media-entertainment/feed/",
-    "Crypto Currency" : "https://techcrunch.com/category/cryptocurrency/feed/",
-    "Robotics" : "https://techcrunch.com/category/robotics/feed/",
-    "Startups" : "https://techcrunch.com/category/startups/feed/",
-    "Enterprise" : "https://techcrunch.com/category/enterprise/feed/",
-    "Commerce" : "https://techcrunch.com/category/commerce/feed/",
-    "Biotech Health" : "https://techcrunch.com/category/biotech-health/feed/"
+    "Security": "https://techcrunch.com/category/security/feed/",
+    "Climate": "https://techcrunch.com/category/climate/feed/",
+    "Cloud Computing": "https://techcrunch.com/category/cloud-computing/feed/",
+    "Gadgets": "https://techcrunch.com/category/gadgets/feed/",
+    "Gaming": "https://techcrunch.com/category/gaming/feed/",
+    "Space": "https://techcrunch.com/category/space/feed/",
+    "Government Policy": "https://techcrunch.com/category/government-policy/feed/",
+    "Layoffs": "https://techcrunch.com/category/layoffs/feed/",
+    "privacy": "https://techcrunch.com/category/privacy/feed/",
+    "Social": "https://techcrunch.com/category/social/feed/",
+    "Media Entertainment": "https://techcrunch.com/category/media-entertainment/feed/",
+    "Crypto Currency": "https://techcrunch.com/category/cryptocurrency/feed/",
+    "Robotics": "https://techcrunch.com/category/robotics/feed/",
+    "Startups": "https://techcrunch.com/category/startups/feed/",
+    "Enterprise": "https://techcrunch.com/category/enterprise/feed/",
+    "Commerce": "https://techcrunch.com/category/commerce/feed/",
+    "Biotech Health": "https://techcrunch.com/category/biotech-health/feed/"
 }
+
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
@@ -47,6 +49,20 @@ def get_article_image(article_url):
         print(f"Error fetching image: {e}")
     return None
 
+def clean_html(raw_html):
+    """Removes HTML tags from the description"""
+    soup = BeautifulSoup(raw_html, "html.parser")
+    return soup.get_text()
+
+def format_date(date_string):
+    """Removes +0000 and formats the date properly"""
+    try:
+        parsed_date = datetime.strptime(date_string, "%a, %d %b %Y %H:%M:%S %z")
+        return parsed_date.strftime("%Y-%m-%d %H:%M:%S")  # Example: 2025-02-15 18:39:14
+    except Exception as e:
+        print(f"Error formatting date: {e}")
+        return date_string  # Return original if parsing fails
+
 def fetch_news(feed_url, category_name):
     """Fetch and parse RSS feed articles"""
     response = requests.get(feed_url, headers=HEADERS)
@@ -58,17 +74,21 @@ def fetch_news(feed_url, category_name):
         return []
 
     articles = []
-    for entry in feed.entries[:5]:  # Fetch latest 5 articles from each category
+    for entry in feed.entries[:40]:  # Fetch latest 5 articles from each category
         image_url = get_article_image(entry.link)  # Fetch image from article page
         categories = [category for category in entry.get("tags", [])]  # Extract categories
         category_names = [cat.term for cat in categories] if categories else []
 
+        # Clean description and format date
+        description_text = clean_html(entry.description) if "description" in entry else "No description"
+        formatted_date = format_date(entry.published) if "published" in entry else "No date"
+
         articles.append({
             "title": entry.title,
             "link": entry.link,
-            "description": entry.description if "description" in entry else "No description",
+            "description": description_text,  # Cleaned text without HTML tags
             "author": entry.get("author", "Unknown Author"),  # Extracted Author
-            "published": entry.published if "published" in entry else "No date",
+            "published": formatted_date,  # Formatted date
             "image": image_url,  # Fetched from the article
             "topics": category_names,  # TechCrunch topics (categories)
             "category": category_name,  # AI or Apps
