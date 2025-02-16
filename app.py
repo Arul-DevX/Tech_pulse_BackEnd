@@ -5,6 +5,7 @@ import feedparser
 from bs4 import BeautifulSoup
 import os
 import concurrent.futures
+import re
 from datetime import datetime
 from flask_caching import Cache
 
@@ -45,9 +46,20 @@ HEADERS = {
 }
 
 def clean_html(raw_html):
-    """Removes HTML tags from the description."""
+    """Removes HTML tags, decodes entities, and removes unnecessary text."""
     soup = BeautifulSoup(raw_html, "html.parser")
-    return soup.get_text()
+
+    # Remove all HTML tags and get plain text
+    text = soup.get_text(separator=" ", strip=True)
+
+    # Decode HTML entities (e.g., &#8230; to …)
+    text = BeautifulSoup(text, "html.parser").text  
+
+    # Remove copyright information or unwanted patterns
+    text = re.sub(r"© \d{4} TechCrunch.*", "", text)  # Remove copyright lines
+    text = re.sub(r"\[.*?\]", "", text)  # Remove unwanted brackets or placeholders
+
+    return text.strip()  # Return cleaned and stripped text
 
 def format_date(date_string):
     """Removes +0000 and formats the date properly."""
@@ -77,7 +89,7 @@ def fetch_news(feed_url, category_name):
             categories = [category for category in entry.get("tags", [])]
             category_names = [cat.term for cat in categories] if categories else []
 
-            description_text = clean_html(entry.description) if "description" in entry else "No description"
+            description_text = clean_html(entry.description) if entry.get("description") else "No description"
             formatted_date = format_date(entry.published) if "published" in entry else "No date"
 
             articles.append({
