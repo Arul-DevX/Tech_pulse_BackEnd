@@ -4,10 +4,18 @@ import requests
 import feedparser
 from bs4 import BeautifulSoup
 import os
+import concurrent.futures
 from datetime import datetime
+from flask_caching import Cache
 
 app = Flask(__name__)
 CORS(app, resources={r"/*": {"origins": "*"}})  # Enable CORS for all routes
+
+# Cache configuration (stores data for 5 minutes)
+app.config["CACHE_TYPE"] = "SimpleCache"
+app.config["CACHE_DEFAULT_TIMEOUT"] = 300  # 5 minutes
+cache = Cache(app)
+cache.init_app(app)
 
 # RSS Feeds
 RSS_FEEDS = {
@@ -21,7 +29,7 @@ RSS_FEEDS = {
     "Space": "https://techcrunch.com/category/space/feed/",
     "Government Policy": "https://techcrunch.com/category/government-policy/feed/",
     "Layoffs": "https://techcrunch.com/category/layoffs/feed/",
-    "privacy": "https://techcrunch.com/category/privacy/feed/",
+    "Privacy": "https://techcrunch.com/category/privacy/feed/",
     "Social": "https://techcrunch.com/category/social/feed/",
     "Media Entertainment": "https://techcrunch.com/category/media-entertainment/feed/",
     "Crypto Currency": "https://techcrunch.com/category/cryptocurrency/feed/",
@@ -36,26 +44,13 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-def get_article_image(article_url):
-    """Fetches the article page and extracts the featured image"""
-    try:
-        response = requests.get(article_url, headers=HEADERS, timeout=5)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            og_image = soup.find("meta", property="og:image")
-            if og_image and og_image["content"]:
-                return og_image["content"]
-    except Exception as e:
-        print(f"Error fetching image: {e}")
-    return None
-
 def clean_html(raw_html):
-    """Removes HTML tags from the description"""
+    """Removes HTML tags from the description."""
     soup = BeautifulSoup(raw_html, "html.parser")
     return soup.get_text()
 
 def format_date(date_string):
-    """Removes +0000 and formats the date properly"""
+    """Removes +0000 and formats the date properly."""
     try:
         parsed_date = datetime.strptime(date_string, "%a, %d %b %Y %H:%M:%S %z")
         return parsed_date.strftime("%Y-%m-%d %H:%M:%S")  # Example: 2025-02-15 18:39:14
@@ -64,51 +59,60 @@ def format_date(date_string):
         return date_string  # Return original if parsing fails
 
 def fetch_news(feed_url, category_name):
-    """Fetch and parse RSS feed articles"""
-    response = requests.get(feed_url, headers=HEADERS)
-    if response.status_code != 200:
+    """Fetch and parse RSS feed articles."""
+    try:
+        response = requests.get(feed_url, headers=HEADERS, timeout=10)
+        response.raise_for_status()  # Raises an error for HTTP failures
+
+        feed = feedparser.parse(response.text)
+        if not feed.entries:
+            print(f"Warning: No entries found for {category_name}. Check the RSS URL.")
+            return []
+
+        articles = []
+        for entry in feed.entries[:40]:  # Limit to latest 40 articles
+            # Extract image directly from RSS feed
+            image_url = entry.get("media_content", [{}])[0].get("url", None) or entry.get("media_thumbnail", [{}])[0].get("url", None)
+
+            categories = [category for category in entry.get("tags", [])]
+            category_names = [cat.term for cat in categories] if categories else []
+
+            description_text = clean_html(entry.description) if "description" in entry else "No description"
+            formatted_date = format_date(entry.published) if "published" in entry else "No date"
+
+            articles.append({
+                "title": entry.title,
+                "link": entry.link,
+                "description": description_text,
+                "author": entry.get("author", "Unknown Author"),
+                "published": formatted_date,
+                "image": image_url,  # Directly from RSS feed
+                "topics": category_names,
+                "category": category_name,
+                "source": "TechCrunch"
+            })
+
+        return articles
+    except requests.exceptions.RequestException as e:
+        print(f"Error fetching {category_name} news: {e}")
         return []
-
-    feed = feedparser.parse(response.text)
-    if not feed.entries:
-        return []
-
-    articles = []
-    for entry in feed.entries[:40]:  # Fetch latest 5 articles from each category
-        image_url = get_article_image(entry.link)  # Fetch image from article page
-        categories = [category for category in entry.get("tags", [])]  # Extract categories
-        category_names = [cat.term for cat in categories] if categories else []
-
-        # Clean description and format date
-        description_text = clean_html(entry.description) if "description" in entry else "No description"
-        formatted_date = format_date(entry.published) if "published" in entry else "No date"
-
-        articles.append({
-            "title": entry.title,
-            "link": entry.link,
-            "description": description_text,  # Cleaned text without HTML tags
-            "author": entry.get("author", "Unknown Author"),  # Extracted Author
-            "published": formatted_date,  # Formatted date
-            "image": image_url,  # Fetched from the article
-            "topics": category_names,  # TechCrunch topics (categories)
-            "category": category_name,  # AI or Apps
-            "source": "TechCrunch"
-        })
-
-    return articles
 
 @app.route("/api/techcrunch", methods=["GET"])
+@cache.cached(timeout=300)  # Cache for 5 minutes
 def get_techcrunch_news():
     news = []
     all_topics = set()
 
-    for category, url in RSS_FEEDS.items():
-        category_news = fetch_news(url, category)
-        news.extend(category_news)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=5) as executor:
+        future_to_category = {executor.submit(fetch_news, url, category): category for category, url in RSS_FEEDS.items()}
 
-        # Collect all unique topics from both feeds
-        for article in category_news:
-            all_topics.update(article["topics"])
+        for future in concurrent.futures.as_completed(future_to_category):
+            category_news = future.result()
+            news.extend(category_news)
+
+            # Collect unique topics
+            for article in category_news:
+                all_topics.update(article["topics"])
 
     return jsonify({"news": news, "topics": list(all_topics)})
 
