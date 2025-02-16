@@ -27,8 +27,6 @@ RSS_FEEDS = {
     "Space": "https://techcrunch.com/category/space/feed/",
     "Layoffs": "https://techcrunch.com/tag/layoffs/feed/",
     "Privacy": "https://techcrunch.com/category/privacy/feed/",
-    "Social": "https://techcrunch.com/category/social/feed/",
-    "Media Entertainment": "https://techcrunch.com/category/media-entertainment/feed/",
     "Crypto Currency": "https://techcrunch.com/category/cryptocurrency/feed/",
     "Robotics": "https://techcrunch.com/category/robotics/feed/",
 }
