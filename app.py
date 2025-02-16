@@ -11,6 +11,7 @@ CORS(app, resources={r"/*": {"origins": "*"}})  # Enable CORS for all routes
 
 # RSS Feeds
 RSS_FEEDS = {
+    "Latest": "https://techcrunch.com/feed/",
     "AI": "https://techcrunch.com/category/artificial-intelligence/feed/",
     "Apps": "https://techcrunch.com/category/apps/feed/",
     "Security": "https://techcrunch.com/category/security/feed/",
