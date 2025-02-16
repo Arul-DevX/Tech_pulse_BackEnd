@@ -1,83 +1,97 @@
 from flask import Flask, jsonify
-import requests
-from bs4 import BeautifulSoup
 from flask_cors import CORS
+import requests
+import feedparser
+from bs4 import BeautifulSoup
 import os
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
+CORS(app, resources={r"/*": {"origins": "*"}})  # Enable CORS for all routes
 
-# Ars Technica URLs
-ARS_TECHNICA_URLS = {
-    "AI": "https://arstechnica.com/ai/",
-    "IT": "https://arstechnica.com/information-technology/",
-    "Cars": "https://arstechnica.com/cars/",
-    "Culture": "https://arstechnica.com/culture/",
-    "Gaming": "https://arstechnica.com/gaming/",
-    "Health": "https://arstechnica.com/health/",
-    "Policy": "https://arstechnica.com/tech-policy/",
-    "Science": "https://arstechnica.com/science/",
-    "Security": "https://arstechnica.com/security/",
-    "Business": "https://arstechnica.com/business/",
-    "Space": "https://arstechnica.com/science/space/",
-    "Gadgets": "https://arstechnica.com/gadgets/"
+# RSS Feeds
+RSS_FEEDS = {
+    "AI": "https://techcrunch.com/category/artificial-intelligence/feed/",
+    "Apps": "https://techcrunch.com/category/apps/feed/",
+    "Security" : "https://techcrunch.com/category/security/feed/",
+    "Climate" : "https://techcrunch.com/category/climate/feed/",
+    "Cloud Computing" : "https://techcrunch.com/category/cloud-computing/feed/",
+    "Gadgets" : "https://techcrunch.com/category/gadgets/feed/",
+    "Gaming" : "https://techcrunch.com/category/gaming/feed/",
+    "Space" : "https://techcrunch.com/category/space/feed/",
+    "Government Policy" : "https://techcrunch.com/category/government-policy/feed/",
+    "Layoffs" : "https://techcrunch.com/category/layoffs/feed/",
+    "privacy" : "https://techcrunch.com/category/privacy/feed/",
+    "Social" : "https://techcrunch.com/category/social/feed/",
+    "Media Entertainment" : "https://techcrunch.com/category/media-entertainment/feed/",
+    "Crypto Currency" : "https://techcrunch.com/category/cryptocurrency/feed/",
+    "Robotics" : "https://techcrunch.com/category/robotics/feed/",
+    "Startups" : "https://techcrunch.com/category/startups/feed/",
+    "Enterprise" : "https://techcrunch.com/category/enterprise/feed/",
+    "Commerce" : "https://techcrunch.com/category/commerce/feed/",
+    "Biotech Health" : "https://techcrunch.com/category/biotech-health/feed/"
 }
-
-# Set user-agent to bypass bot protection
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-def scrape_ars_technica(url):
-    """Scrape news articles from an Ars Technica category page."""
+def get_article_image(article_url):
+    """Fetches the article page and extracts the featured image"""
     try:
-        response = requests.get(url, headers=HEADERS)
-        if response.status_code != 200:
-            print(f"⚠️ Failed to fetch: {url} (Status: {response.status_code})")
-            return []
-
-        soup = BeautifulSoup(response.text, "html.parser")
-        articles = []
-
-        # 🔹 Inspect the page source to get the correct class
-        for article in soup.find_all("article"):  # Updated selector
-            title_tag = article.find("a")
-            summary_tag = article.find("p")
-            image_tag = article.find("img")
-
-            if title_tag:
-                title = title_tag.text.strip()
-                link = title_tag["href"]
-                summary = summary_tag.text.strip() if summary_tag else "No Summary"
-                image = image_tag["src"] if image_tag else "https://via.placeholder.com/300"
-
-                articles.append({
-                    "title": title,
-                    "summary": summary,
-                    "image": image,
-                    "url": link
-                })
-
-        return articles[:5]  # Limit to latest 5 articles
-
+        response = requests.get(article_url, headers=HEADERS, timeout=5)
+        if response.status_code == 200:
+            soup = BeautifulSoup(response.text, "html.parser")
+            og_image = soup.find("meta", property="og:image")
+            if og_image and og_image["content"]:
+                return og_image["content"]
     except Exception as e:
-        print(f"❌ Error scraping {url}: {e}")
+        print(f"Error fetching image: {e}")
+    return None
+
+def fetch_news(feed_url, category_name):
+    """Fetch and parse RSS feed articles"""
+    response = requests.get(feed_url, headers=HEADERS)
+    if response.status_code != 200:
         return []
 
-@app.route("/news/all", methods=["GET"])
-def get_all_news():
-    """Fetch news from multiple Ars Technica sections."""
-    all_news = {}
+    feed = feedparser.parse(response.text)
+    if not feed.entries:
+        return []
 
-    for category, url in ARS_TECHNICA_URLS.items():
-        articles = scrape_ars_technica(url)
-        if articles:
-            all_news[category] = articles
-        else:
-            all_news[category] = [{"error": "No news available"}]
+    articles = []
+    for entry in feed.entries[:5]:  # Fetch latest 5 articles from each category
+        image_url = get_article_image(entry.link)  # Fetch image from article page
+        categories = [category for category in entry.get("tags", [])]  # Extract categories
+        category_names = [cat.term for cat in categories] if categories else []
 
-    return jsonify(all_news)
+        articles.append({
+            "title": entry.title,
+            "link": entry.link,
+            "description": entry.description if "description" in entry else "No description",
+            "author": entry.get("author", "Unknown Author"),  # Extracted Author
+            "published": entry.published if "published" in entry else "No date",
+            "image": image_url,  # Fetched from the article
+            "topics": category_names,  # TechCrunch topics (categories)
+            "category": category_name,  # AI or Apps
+            "source": "TechCrunch"
+        })
+
+    return articles
+
+@app.route("/api/techcrunch", methods=["GET"])
+def get_techcrunch_news():
+    news = []
+    all_topics = set()
+
+    for category, url in RSS_FEEDS.items():
+        category_news = fetch_news(url, category)
+        news.extend(category_news)
+
+        # Collect all unique topics from both feeds
+        for article in category_news:
+            all_topics.update(article["topics"])
+
+    return jsonify({"news": news, "topics": list(all_topics)})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Use dynamic port for Render
+    port = int(os.environ.get("PORT", 5000))  # Use dynamic port for Render deployment
     app.run(host="0.0.0.0", port=port, debug=True)
