@@ -83,7 +83,7 @@ def fetch_news(feed_url, category_name):
             return []
 
         articles = []
-        for entry in feed.entries[:2]:  # Limit to latest 15 articles
+        for entry in feed.entries[:15]:  # Limit to latest 15 articles
             image_url = None
             if "media_content" in entry:
                 image_url = entry.media_content[0]["url"]
