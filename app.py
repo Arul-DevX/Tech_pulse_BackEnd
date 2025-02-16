@@ -1,5 +1,6 @@
 from flask import Flask, jsonify
 from flask_cors import CORS
+from flask_caching import Cache  # Import Flask-Caching
 import requests
 import feedparser
 from bs4 import BeautifulSoup
@@ -7,7 +8,12 @@ import os
 from datetime import datetime
 
 app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})  # Enable CORS for all routes
+CORS(app, resources={r"/*": {"origins": "*"}})  # Enable CORS
+
+# Flask-Caching configuration
+app.config["CACHE_TYPE"] = "simple"  # In-memory caching
+app.config["CACHE_DEFAULT_TIMEOUT"] = 600  # Cache for 10 minutes
+cache = Cache(app)  # Initialize cache
 
 # RSS Feeds
 RSS_FEEDS = {
@@ -15,22 +21,16 @@ RSS_FEEDS = {
     "AI": "https://techcrunch.com/category/artificial-intelligence/feed/",
     "Apps": "https://techcrunch.com/category/apps/feed/",
     "Security": "https://techcrunch.com/category/security/feed/",
-    "Climate": "https://techcrunch.com/category/climate/feed/",
     "Cloud Computing": "https://techcrunch.com/tag/cloud-computing/feed/",
     "Gadgets": "https://techcrunch.com/category/gadgets/feed/",
     "Gaming": "https://techcrunch.com/category/gaming/feed/",
     "Space": "https://techcrunch.com/category/space/feed/",
-    "Government Policy": "https://techcrunch.com/category/government-policy/feed/",
     "Layoffs": "https://techcrunch.com/tag/layoffs/feed/",
     "Privacy": "https://techcrunch.com/category/privacy/feed/",
     "Social": "https://techcrunch.com/category/social/feed/",
     "Media Entertainment": "https://techcrunch.com/category/media-entertainment/feed/",
     "Crypto Currency": "https://techcrunch.com/category/cryptocurrency/feed/",
     "Robotics": "https://techcrunch.com/category/robotics/feed/",
-    "Startups": "https://techcrunch.com/category/startups/feed/",
-    "Enterprise": "https://techcrunch.com/category/enterprise/feed/",
-    "Commerce": "https://techcrunch.com/category/commerce/feed/",
-    "Biotech Health": "https://techcrunch.com/category/biotech-health/feed/"
 }
 
 HEADERS = {
@@ -38,7 +38,7 @@ HEADERS = {
 }
 
 def get_article_image(article_url):
-    """Fetches the article page and extracts the featured image from og:image."""
+    """Fetches the article page and extracts the featured image."""
     try:
         response = requests.get(article_url, headers=HEADERS, timeout=5)
         if response.status_code == 200:
@@ -56,14 +56,15 @@ def clean_html(raw_html):
     return soup.get_text()
 
 def format_date(date_string):
-    """Removes +0000 and formats the date properly."""
+    """Formats the date properly."""
     try:
         parsed_date = datetime.strptime(date_string, "%a, %d %b %Y %H:%M:%S %z")
-        return parsed_date.strftime("%Y-%m-%d %H:%M:%S")  # Example: 2025-02-15 18:39:14
+        return parsed_date.strftime("%Y-%m-%d %H:%M:%S")
     except Exception as e:
         print(f"Error formatting date: {e}")
-        return date_string  # Return original if parsing fails
+        return date_string
 
+@cache.memoize(timeout=600)  # Cache each category's news for 10 minutes
 def fetch_news(feed_url, category_name):
     """Fetch and parse RSS feed articles."""
     try:
@@ -76,8 +77,7 @@ def fetch_news(feed_url, category_name):
             return []
 
         articles = []
-        for entry in feed.entries[:4]:  # Limit to latest 40 articles
-            # Extract image from RSS fields
+        for entry in feed.entries[:15]:  # Limit to latest 15 articles
             image_url = None
             if "media_content" in entry:
                 image_url = entry.media_content[0]["url"]
@@ -86,13 +86,11 @@ def fetch_news(feed_url, category_name):
             elif "enclosures" in entry and entry.enclosures:
                 image_url = entry.enclosures[0]["href"]
             elif "content" in entry and isinstance(entry.content, list):
-                # Check for image inside content
                 soup = BeautifulSoup(entry.content[0].value, "html.parser")
                 img_tag = soup.find("img")
                 if img_tag and img_tag.get("src"):
                     image_url = img_tag["src"]
 
-            # Fetch image from article page if missing
             if not image_url:
                 image_url = get_article_image(entry.link)
 
@@ -108,7 +106,7 @@ def fetch_news(feed_url, category_name):
                 "description": description_text,
                 "author": entry.get("author", "Unknown Author"),
                 "published": formatted_date,
-                "image": image_url or "https://via.placeholder.com/300",  # Fallback placeholder
+                "image": image_url or "https://via.placeholder.com/300",
                 "topics": category_names,
                 "category": category_name,
                 "source": "TechCrunch"
@@ -120,6 +118,7 @@ def fetch_news(feed_url, category_name):
         return []
 
 @app.route("/api/techcrunch", methods=["GET"])
+@cache.cached(timeout=300)  # Cache the entire API response for 5 minutes
 def get_techcrunch_news():
     """Fetch all TechCrunch news categories."""
     news = []
@@ -129,12 +128,11 @@ def get_techcrunch_news():
         category_news = fetch_news(url, category)
         news.extend(category_news)
 
-        # Collect all unique topics from feeds
         for article in category_news:
             all_topics.update(article["topics"])
 
     return jsonify({"news": news, "topics": list(all_topics)})
 
 if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))  # Use dynamic port for Render deployment
+    port = int(os.environ.get("PORT", 5000))  # Use dynamic port for Render
     app.run(host="0.0.0.0", port=port, debug=True)
