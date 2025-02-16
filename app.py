@@ -5,7 +5,6 @@ import feedparser
 from bs4 import BeautifulSoup
 import os
 import concurrent.futures
-import re
 from datetime import datetime
 from flask_caching import Cache
 
@@ -46,29 +45,41 @@ HEADERS = {
 }
 
 def clean_html(raw_html):
-    """Removes HTML tags, decodes entities, and removes unnecessary text."""
+    """Removes HTML tags from the description."""
     soup = BeautifulSoup(raw_html, "html.parser")
-
-    # Remove all HTML tags and get plain text
-    text = soup.get_text(separator=" ", strip=True)
-
-    # Decode HTML entities (e.g., &#8230; to …)
-    text = BeautifulSoup(text, "html.parser").text  
-
-    # Remove copyright information or unwanted patterns
-    text = re.sub(r"© \d{4} TechCrunch.*", "", text)  # Remove copyright lines
-    text = re.sub(r"\[.*?\]", "", text)  # Remove unwanted brackets or placeholders
-
-    return text.strip()  # Return cleaned and stripped text
+    return soup.get_text()
 
 def format_date(date_string):
-    """Removes +0000 and formats the date properly."""
+    """Formats the date properly and removes time zone info."""
     try:
         parsed_date = datetime.strptime(date_string, "%a, %d %b %Y %H:%M:%S %z")
         return parsed_date.strftime("%Y-%m-%d %H:%M:%S")  # Example: 2025-02-15 18:39:14
     except Exception as e:
         print(f"Error formatting date: {e}")
         return date_string  # Return original if parsing fails
+
+def extract_image(entry):
+    """Extracts an image from the RSS entry."""
+    # Check for media:content or media:thumbnail
+    if "media_content" in entry and isinstance(entry.media_content, list):
+        for media in entry.media_content:
+            if "url" in media:
+                return media["url"]
+
+    if "media_thumbnail" in entry and isinstance(entry.media_thumbnail, list):
+        for media in entry.media_thumbnail:
+            if "url" in media:
+                return media["url"]
+
+    # Fallback: Try extracting the first <img> tag from the description
+    if "description" in entry:
+        soup = BeautifulSoup(entry.description, "html.parser")
+        img_tag = soup.find("img")
+        if img_tag and img_tag.get("src"):
+            return img_tag["src"]
+
+    # Provide a default placeholder image if nothing is found
+    return "https://via.placeholder.com/300x200?text=No+Image"
 
 def fetch_news(feed_url, category_name):
     """Fetch and parse RSS feed articles."""
@@ -83,13 +94,12 @@ def fetch_news(feed_url, category_name):
 
         articles = []
         for entry in feed.entries[:40]:  # Limit to latest 40 articles
-            # Extract image directly from RSS feed
-            image_url = entry.get("media_content", [{}])[0].get("url", None) or entry.get("media_thumbnail", [{}])[0].get("url", None)
+            image_url = extract_image(entry)  # Extract image using function
 
             categories = [category for category in entry.get("tags", [])]
             category_names = [cat.term for cat in categories] if categories else []
 
-            description_text = clean_html(entry.description) if entry.get("description") else "No description"
+            description_text = clean_html(entry.description) if "description" in entry else "No description"
             formatted_date = format_date(entry.published) if "published" in entry else "No date"
 
             articles.append({
@@ -98,7 +108,7 @@ def fetch_news(feed_url, category_name):
                 "description": description_text,
                 "author": entry.get("author", "Unknown Author"),
                 "published": formatted_date,
-                "image": image_url,  # Directly from RSS feed
+                "image": image_url,  # Extracted image
                 "topics": category_names,
                 "category": category_name,
                 "source": "TechCrunch"
