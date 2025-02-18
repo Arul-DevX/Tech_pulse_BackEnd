@@ -43,19 +43,6 @@ HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 }
 
-def get_article_image(article_url):
-    """Fetches the article page and extracts the featured image."""
-    try:
-        response = requests.get(article_url, headers=HEADERS, timeout=5)
-        if response.status_code == 200:
-            soup = BeautifulSoup(response.text, "html.parser")
-            og_image = soup.find("meta", property="og:image")
-            if og_image and og_image.get("content"):
-                return og_image["content"]
-    except Exception as e:
-        print(f"Error fetching image: {e}")
-    return None
-
 def clean_html(raw_html):
     """Removes HTML tags from the description."""
     soup = BeautifulSoup(raw_html, "html.parser")
@@ -91,14 +78,6 @@ def fetch_news(feed_url, category_name):
                 image_url = entry.media_thumbnail[0]["url"]
             elif "enclosures" in entry and entry.enclosures:
                 image_url = entry.enclosures[0]["href"]
-            elif "content" in entry and isinstance(entry.content, list):
-                soup = BeautifulSoup(entry.content[0].value, "html.parser")
-                img_tag = soup.find("img")
-                if img_tag and img_tag.get("src"):
-                    image_url = img_tag["src"]
-
-            if not image_url:
-                image_url = get_article_image(entry.link)
 
             categories = [category for category in entry.get("tags", [])]
             category_names = [cat.term for cat in categories] if categories else []
@@ -112,7 +91,7 @@ def fetch_news(feed_url, category_name):
                 "description": description_text,
                 "author": entry.get("author", "Unknown Author"),
                 "published": formatted_date,
-                "image": image_url or "https://via.placeholder.com/300",
+                "image": image_url or None,  # Remove placeholder
                 "topics": category_names,
                 "category": category_name,
                 "source": "TechCrunch"
