@@ -172,6 +172,117 @@ def fetch_news(feed_url, category_name):
     except requests.exceptions.RequestException as e:
         print(f"Error fetching {category_name} news: {e}")
         return []
+@cache.memoize(timeout=3600)  # Cache for 1 hour
+def get_full_article_content(article_url):
+    """
+    Scrape the full article content from a TechCrunch article
+    """
+    try:
+        response = requests.get(article_url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Get the featured image
+        featured_image = get_techcrunch_image(article_url)
+        
+        # Find the article content container
+        article_content = soup.select_one('div.article-content')
+        
+        if not article_content:
+            # Try alternative selectors if the main one fails
+            article_content = soup.select_one('.post-content, .entry-content, article')
+        
+        if not article_content:
+            return {
+                "success": False,
+                "message": "Could not find article content",
+                "featured_image": featured_image
+            }
+        
+        # Extract and process all images in the article
+        images = []
+        for img in article_content.find_all('img'):
+            if 'src' in img.attrs:
+                img_url = img['src']
+                # Make sure URL is absolute
+                if not img_url.startswith(('http://', 'https://')):
+                    img_url = urljoin(article_url, img_url)
+                
+                # Save image info
+                alt_text = img.get('alt', '')
+                images.append({
+                    "url": img_url,
+                    "alt": alt_text
+                })
+        
+        # Get all paragraphs of text
+        paragraphs = []
+        for p in article_content.find_all(['p', 'h2', 'h3', 'h4', 'blockquote']):
+            # Remove any script or style elements
+            for script in p.find_all(['script', 'style']):
+                script.decompose()
+                
+            # Get the text content
+            text = p.get_text().strip()
+            if text:
+                # Determine the type of element
+                tag_type = p.name
+                paragraphs.append({
+                    "type": tag_type,
+                    "content": text
+                })
+        
+        # Extract any embedded tweets or social media content
+        embeds = []
+        for embed in article_content.select('.embed, iframe, twitterwidget, blockquote.twitter-tweet'):
+            embed_html = str(embed)
+            embeds.append(embed_html)
+        
+        # Get author info if available
+        author_element = soup.select_one('.article__byline a, .byline-link')
+        author = author_element.get_text() if author_element else "Unknown Author"
+        
+        # Get publication date if available
+        date_element = soup.select_one('time, .article__byline time, .byline-timestamp')
+        pub_date = date_element.get('datetime') if date_element and date_element.has_attr('datetime') else None
+        
+        # Structure the complete article data
+        article_data = {
+            "success": True,
+            "title": soup.title.string if soup.title else "",
+            "featured_image": featured_image,
+            "author": author,
+            "published_date": pub_date,
+            "content": paragraphs,
+            "images": images,
+            "embeds": embeds
+        }
+        
+        return article_data
+        
+    except Exception as e:
+        print(f"Error extracting full article from {article_url}: {e}")
+        return {
+            "success": False,
+            "message": f"Error: {str(e)}",
+            "featured_image": get_techcrunch_image(article_url)
+        }
+
+# Add this new route to your Flask app
+@app.route("/api/article", methods=["GET"])
+@cache.cached(timeout=1800)  # Cache for 30 minutes
+def get_article():
+    article_url = request.args.get('url')
+    if not article_url:
+        return jsonify({"error": "No URL provided"}), 400
+    
+    # Validate the URL is from TechCrunch
+    if not article_url.startswith('https://techcrunch.com/'):
+        return jsonify({"error": "Only TechCrunch URLs are supported"}), 400
+    
+    article_data = get_full_article_content(article_url)
+    return jsonify(article_data)
 
 @app.route("/api/techcrunch", methods=["GET"])
 @cache.cached(timeout=300)
