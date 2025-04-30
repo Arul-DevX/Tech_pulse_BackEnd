@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from flask_caching import Cache
 import requests
@@ -122,6 +122,109 @@ def get_techcrunch_image(article_url):
         print(f"Error scraping image from TechCrunch article {article_url}: {e}")
         return None
 
+@cache.memoize(timeout=3600)  # Cache for 1 hour
+def get_article_content(article_url, content_percentage=100):
+    """
+    Scrape the article content from TechCrunch and return the specified percentage
+    """
+    try:
+        response = requests.get(article_url, headers=HEADERS, timeout=10)
+        response.raise_for_status()
+        
+        soup = BeautifulSoup(response.text, 'html.parser')
+        
+        # Find the article content container
+        article_content = soup.select_one('.article-content')
+        
+        if not article_content:
+            # Try alternative selectors for article content
+            article_content = soup.select_one('article .post-block')
+            
+        if not article_content:
+            # Another alternative
+            article_content = soup.select_one('.entry-content')
+            
+        if not article_content:
+            # If we still can't find the content, get the main article element
+            article_content = soup.select_one('article')
+        
+        if not article_content:
+            return {
+                "error": "Could not extract article content",
+                "content_html": "",
+                "content_text": ""
+            }
+        
+        # Remove unwanted elements like related articles, ads, etc.
+        for unwanted in article_content.select('.related-articles, .advertisement, .ad-zone, .share-block, .footer, .tags, .wp-block-latest-posts'):
+            unwanted.decompose()
+        
+        # Process images to ensure they have absolute URLs
+        for img in article_content.find_all('img'):
+            if 'src' in img.attrs:
+                if not img['src'].startswith(('http://', 'https://')):
+                    img['src'] = urljoin(article_url, img['src'])
+                # Make sure we prioritize high-res images
+                if 'srcset' in img.attrs:
+                    srcset = img['srcset'].split(',')
+                    if srcset:
+                        largest_src = srcset[-1].strip().split(' ')[0]
+                        if largest_src:
+                            img['src'] = largest_src
+                
+        # Get the full HTML content
+        full_html = str(article_content)
+        full_text = article_content.get_text(separator=' ', strip=True)
+        
+        # If we need to return only a portion of the content
+        if content_percentage < 100:
+            # For HTML, we'll take a percentage of the elements
+            soup_content = BeautifulSoup(full_html, 'html.parser')
+            all_elements = soup_content.find_all(['p', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol'])
+            
+            # Calculate how many elements to keep
+            elements_to_keep = max(1, int(len(all_elements) * (content_percentage / 100)))
+            
+            # Create a new soup with just the elements we want to keep
+            partial_soup = BeautifulSoup('<div></div>', 'html.parser')
+            for i, elem in enumerate(all_elements):
+                if i < elements_to_keep:
+                    partial_soup.div.append(elem)
+            
+            # Add a "Read more at TechCrunch" link
+            read_more = soup.new_tag('p')
+            read_more.string = f"Read the full article at TechCrunch: "
+            
+            read_more_link = soup.new_tag('a', href=article_url)
+            read_more_link.string = "Continue reading..."
+            read_more_link['target'] = '_blank'
+            read_more_link['rel'] = 'noopener noreferrer'
+            
+            read_more.append(read_more_link)
+            partial_soup.div.append(read_more)
+            
+            # For text, we'll take a percentage of the characters
+            text_chars_to_keep = max(100, int(len(full_text) * (content_percentage / 100)))
+            partial_text = full_text[:text_chars_to_keep] + f"... [Read more at TechCrunch]"
+            
+            return {
+                "content_html": str(partial_soup.div),
+                "content_text": partial_text
+            }
+        
+        return {
+            "content_html": full_html,
+            "content_text": full_text
+        }
+        
+    except Exception as e:
+        print(f"Error scraping content from article {article_url}: {e}")
+        return {
+            "error": str(e),
+            "content_html": "",
+            "content_text": ""
+        }
+
 @cache.memoize(timeout=600)
 def fetch_news(feed_url, category_name):
     try:
@@ -172,117 +275,6 @@ def fetch_news(feed_url, category_name):
     except requests.exceptions.RequestException as e:
         print(f"Error fetching {category_name} news: {e}")
         return []
-@cache.memoize(timeout=3600)  # Cache for 1 hour
-def get_full_article_content(article_url):
-    """
-    Scrape the full article content from a TechCrunch article
-    """
-    try:
-        response = requests.get(article_url, headers=HEADERS, timeout=10)
-        response.raise_for_status()
-        
-        soup = BeautifulSoup(response.text, 'html.parser')
-        
-        # Get the featured image
-        featured_image = get_techcrunch_image(article_url)
-        
-        # Find the article content container
-        article_content = soup.select_one('div.article-content')
-        
-        if not article_content:
-            # Try alternative selectors if the main one fails
-            article_content = soup.select_one('.post-content, .entry-content, article')
-        
-        if not article_content:
-            return {
-                "success": False,
-                "message": "Could not find article content",
-                "featured_image": featured_image
-            }
-        
-        # Extract and process all images in the article
-        images = []
-        for img in article_content.find_all('img'):
-            if 'src' in img.attrs:
-                img_url = img['src']
-                # Make sure URL is absolute
-                if not img_url.startswith(('http://', 'https://')):
-                    img_url = urljoin(article_url, img_url)
-                
-                # Save image info
-                alt_text = img.get('alt', '')
-                images.append({
-                    "url": img_url,
-                    "alt": alt_text
-                })
-        
-        # Get all paragraphs of text
-        paragraphs = []
-        for p in article_content.find_all(['p', 'h2', 'h3', 'h4', 'blockquote']):
-            # Remove any script or style elements
-            for script in p.find_all(['script', 'style']):
-                script.decompose()
-                
-            # Get the text content
-            text = p.get_text().strip()
-            if text:
-                # Determine the type of element
-                tag_type = p.name
-                paragraphs.append({
-                    "type": tag_type,
-                    "content": text
-                })
-        
-        # Extract any embedded tweets or social media content
-        embeds = []
-        for embed in article_content.select('.embed, iframe, twitterwidget, blockquote.twitter-tweet'):
-            embed_html = str(embed)
-            embeds.append(embed_html)
-        
-        # Get author info if available
-        author_element = soup.select_one('.article__byline a, .byline-link')
-        author = author_element.get_text() if author_element else "Unknown Author"
-        
-        # Get publication date if available
-        date_element = soup.select_one('time, .article__byline time, .byline-timestamp')
-        pub_date = date_element.get('datetime') if date_element and date_element.has_attr('datetime') else None
-        
-        # Structure the complete article data
-        article_data = {
-            "success": True,
-            "title": soup.title.string if soup.title else "",
-            "featured_image": featured_image,
-            "author": author,
-            "published_date": pub_date,
-            "content": paragraphs,
-            "images": images,
-            "embeds": embeds
-        }
-        
-        return article_data
-        
-    except Exception as e:
-        print(f"Error extracting full article from {article_url}: {e}")
-        return {
-            "success": False,
-            "message": f"Error: {str(e)}",
-            "featured_image": get_techcrunch_image(article_url)
-        }
-
-# Add this new route to your Flask app
-@app.route("/api/article", methods=["GET"])
-@cache.cached(timeout=1800)  # Cache for 30 minutes
-def get_article():
-    article_url = request.args.get('url')
-    if not article_url:
-        return jsonify({"error": "No URL provided"}), 400
-    
-    # Validate the URL is from TechCrunch
-    if not article_url.startswith('https://techcrunch.com/'):
-        return jsonify({"error": "Only TechCrunch URLs are supported"}), 400
-    
-    article_data = get_full_article_content(article_url)
-    return jsonify(article_data)
 
 @app.route("/api/techcrunch", methods=["GET"])
 @cache.cached(timeout=300)
@@ -317,6 +309,40 @@ def get_latest_news():
     latest_articles = sorted_articles[:10]
 
     return jsonify({"latest": latest_articles})
+
+@app.route("/api/article-content", methods=["GET"])
+def get_article_detail():
+    """
+    API endpoint to get article content at a specified percentage
+    
+    Query parameters:
+    - url: The URL of the article to fetch
+    - percentage: (Optional) Percentage of content to return (default: 100)
+    """
+    article_url = request.args.get('url')
+    percentage = request.args.get('percentage', 100, type=int)
+    
+    if not article_url:
+        return jsonify({"error": "Missing required parameter: url"}), 400
+    
+    # Validate percentage
+    if percentage < 1 or percentage > 100:
+        percentage = 100
+    
+    # Get the article content
+    content = get_article_content(article_url, percentage)
+    
+    # Get the article image as well
+    image_url = get_techcrunch_image(article_url)
+    
+    response = {
+        "url": article_url,
+        "percentage": percentage,
+        "image": image_url,
+        "content": content
+    }
+    
+    return jsonify(response)
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
